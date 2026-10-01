@@ -1,0 +1,70 @@
+const { spawn } = require('child_process');
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+
+const outDir = 'C:\\Users\\user\\.gemini\\antigravity\\brain\\107b972b-87b2-42db-bc0f-d20ff58df108';
+
+async function run() {
+  const edge = spawn('C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', [
+    '--headless=new',
+    '--remote-debugging-port=9233',
+    '--disable-gpu',
+    '--no-sandbox',
+    '--window-size=1440,1180',
+    'http://localhost:3000'
+  ]);
+
+  await new Promise(r => setTimeout(r, 2000));
+
+  try {
+    const listRes = await new Promise((resolve, reject) => {
+      http.get('http://localhost:9233/json', res => {
+        let d = '';
+        res.on('data', c => d += c);
+        res.on('end', () => resolve(JSON.parse(d)));
+      }).on('error', reject);
+    });
+
+    const page = listRes.find(t => t.type === 'page');
+    const ws = new WebSocket(page.webSocketDebuggerUrl);
+
+    await new Promise(resolve => ws.onopen = resolve);
+
+    let id = 1;
+    function send(method, params = {}) {
+      return new Promise((resolve) => {
+        const msgId = id++;
+        const handler = (msg) => {
+          const data = JSON.parse(msg.data);
+          if (data.id === msgId) {
+            ws.removeEventListener('message', handler);
+            resolve(data.result);
+          }
+        };
+        ws.addEventListener('message', handler);
+        ws.send(JSON.stringify({ id: msgId, method, params }));
+      });
+    }
+
+    // Scroll to #the-space
+    await send('Runtime.evaluate', {
+      expression: `
+        document.getElementById('the-space')?.scrollIntoView({ behavior: 'instant', block: 'start' });
+      `
+    });
+    await new Promise(r => setTimeout(r, 1200));
+
+    const shot = await send('Page.captureScreenshot', { format: 'png' });
+    fs.writeFileSync(path.join(outDir, 'our_office_desktop_full.png'), Buffer.from(shot.data, 'base64'));
+    console.log('Saved our_office_desktop_full.png');
+
+    ws.close();
+  } catch (err) {
+    console.error('Error:', err);
+  } finally {
+    edge.kill();
+  }
+}
+
+run();
